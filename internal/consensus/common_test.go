@@ -253,6 +253,7 @@ func decideProposal(
 
 func addVotes(to *State, votes ...*types.Vote) {
 	for _, vote := range votes {
+		fmt.Println("adding vote")
 		to.peerMsgQueue <- msgInfo{Msg: &VoteMessage{vote}}
 	}
 }

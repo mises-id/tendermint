@@ -1188,7 +1188,9 @@ func (cs *State) defaultDecideProposal(height int64, round int32) {
 	p := proposal.ToProto()
 
 	// wait the max amount we would wait for a proposal
-	ctx, cancel := context.WithTimeout(context.TODO(), cs.config.TimeoutPropose)
+	waitingTime := proposalStepWaitingTime(tmtime.DefaultSource{}, cs.state.LastBlockTime, cs.state.ConsensusParams.Timestamp)
+	proposalTimeout := maxDuration(cs.config.TimeoutPropose, waitingTime)
+	ctx, cancel := context.WithTimeout(context.TODO(), proposalTimeout)
 	defer cancel()
 	if err := cs.privValidator.SignProposal(ctx, cs.state.ChainID, p); err == nil {
 		proposal.Signature = p.Signature
@@ -2417,12 +2419,12 @@ func repairWalFile(src, dst string) error {
 // Block times must be monotonically increasing, so if the block time of the previous
 // block is larger than the proposer's current time, then the proposer will sleep
 // until its local clock exceeds the previous block time.
-func proposerWaitTime(lt tmtime.Source, h types.Header) time.Duration {
+func proposerWaitTime(lt tmtime.Source, bt time.Time) time.Duration {
 	t := lt.Now()
-	if t.After(h.Time) {
+	if t.After(bt) {
 		return 0
 	}
-	return h.Time.Sub(t)
+	return bt.Sub(t)
 }
 
 // proposalStepWaitingTime determines how long a validator should wait for a block
@@ -2432,11 +2434,18 @@ func proposerWaitTime(lt tmtime.Source, h types.Header) time.Duration {
 // 2 * Accuracy and the proposal should take at most MsgDelay to arrive at the validator.
 // The validator must therefore wait at least 2 * Accuracy + MsgDelay for the proposal
 // to arrive.
-func proposalStepWaitingTime(lt tmtime.Source, h types.Header, tp types.TimestampParams) time.Duration {
+func proposalStepWaitingTime(lt tmtime.Source, bt time.Time, tp types.TimestampParams) time.Duration {
 	t := lt.Now()
-	wt := h.Time.Add(2 * tp.Accuracy).Add(tp.MsgDelay)
+	wt := bt.Add(2 * tp.Accuracy).Add(tp.MsgDelay)
 	if t.After(wt) {
 		return 0
 	}
 	return wt.Sub(t)
+}
+
+func maxDuration(d1 time.Duration, d2 time.Duration) time.Duration {
+	if d1-d2 > 0 {
+		return d1
+	}
+	return d2
 }
