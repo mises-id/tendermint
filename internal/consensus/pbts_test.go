@@ -8,86 +8,158 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tmtime "github.com/tendermint/tendermint/libs/time"
+	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
 	tmtimemocks "github.com/tendermint/tendermint/libs/time/mocks"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/version"
 )
 
-// want something that lets me easily generate a pbts test case that can
-// vary in a reasonable way related to where proposer based timestamps may break things
-// let's write an imaginary test and see what is missing
+type pbtsTestHarness struct {
+	s                 pbtsTestConfiguration
+	observedState     *State
+	observedValidator *validatorStub
+	otherValidators   []*validatorStub
+	chainID           string
 
-func TestValidatorWaits(t *testing.T) {
+	proposalCh, roundCh, blockCh, voteCh <-chan tmpubsub.Message
 
-	// todo
-	// create a block that is signed over by a quorum of validators
+	currentHeight  int64
+	currentRound   int32
+	proposerOffset int
+}
 
+type pbtsTestConfiguration struct {
+	ts                         types.TimestampParams
+	timeoutPropose             time.Duration
+	proposedTimes              []time.Time
+	proposalDeviverTime        []time.Time
+	genesisTime                time.Time
+	height2ProposalDeliverTime time.Time
+	height2ProposedBlockTime   time.Time
+	height3ProposalDeliverTime time.Time
+	height3ProposedBlockTime   time.Time
+}
+
+func newPBTSTestHarness(t *testing.T, tc pbtsTestConfiguration) pbtsTestHarness {
 	cfg := configSetup(t)
-	// rand state creates a genesis file from the configuration file
-	// it creates the number of validators passed in as arg 2
-	// randState then
-	cs1, vss := randState(cfg, 4)
-	height, round := cs1.Height, cs1.Round
-	newRoundCh := subscribe(cs1.eventBus, types.EventQueryNewRound)
-	//	proposalCh := subscribe(cs1.eventBus, types.EventQueryCompleteProposal)
-	newBlockCh := subscribe(cs1.eventBus, types.EventQueryNewBlock)
-	startTestRound(cs1, height, round)
-	ensureNewRound(t, newRoundCh, height, round)
-	cs1.createProposalBlock() // changeProposer(t, cs1, vs2)
+	cfg.Consensus.TimeoutPropose = tc.timeoutPropose
+	cs, vss := randState(cfg, 4)
+	cs.state.LastBlockTime = tc.genesisTime
+	return pbtsTestHarness{
+		s:                 tc,
+		observedValidator: vss[0],
+		observedState:     cs,
+		otherValidators:   vss[1:],
+		currentHeight:     1,
+		chainID:           cfg.ChainID(),
+		roundCh:           subscribe(cs.eventBus, types.EventQueryNewRound),
+		proposalCh:        subscribe(cs.eventBus, types.EventQueryCompleteProposal),
+		blockCh:           subscribe(cs.eventBus, types.EventQueryNewBlock),
+		voteCh:            subscribe(cs.eventBus, types.EventQueryVote),
+	}
+}
 
-	// make the second validator the proposer by incrementing round
-	round++
-	ensureNewRound(t, newRoundCh, height, round)
+func (p *pbtsTestHarness) genesisHeight(t *testing.T) {
+	startTestRound(p.observedState, p.currentHeight, p.currentRound)
+	ensureNewRound(t, p.roundCh, p.currentHeight, p.currentRound)
+	propBlock, partSet := p.observedState.createProposalBlock()
+	bid := types.BlockID{Hash: propBlock.Hash(), PartSetHeader: partSet.Header()}
+	ensureProposal(t, p.proposalCh, p.currentHeight, p.currentRound, bid)
 
-	// make a fake commit from a block from h-1
-	b := types.MakeBlock(height, []types.Tx{}, &types.Commit{}, []types.Evidence{})
-	bt := tmtime.Now().Add(5 * time.Minute)
-	b.Header.Populate(
-		version.Consensus{}, "", bt, types.BlockID{},
-		[]byte{}, []byte{},
-		[]byte{}, []byte{}, []byte{},
-		types.Address{},
-	)
-	partSet := b.MakePartSet(types.BlockPartSizeBytes)
-	blockID := types.BlockID{Hash: b.Hash(), PartSetHeader: partSet.Header()}
-	proposal := types.NewProposal(height, round, -1, blockID)
+	ensurePrevote(t, p.voteCh, p.currentHeight, p.currentRound)
+	signAddVotes(p.observedState, tmproto.PrevoteType, p.chainID, p.s.height2ProposedBlockTime, bid, p.otherValidators...)
 
-	if err := vss[1].SignProposal(context.Background(), cs1.state.ChainID, proposal.ToProto()); err != nil {
+	signAddVotes(p.observedState, tmproto.PrecommitType, p.chainID, p.s.height2ProposedBlockTime, bid, p.otherValidators...)
+
+	ensureNewBlock(t, p.blockCh, p.currentHeight)
+	p.currentHeight++
+	incrementHeight(p.otherValidators...)
+}
+
+func (p *pbtsTestHarness) height2(t *testing.T) heightResult {
+	signer := p.otherValidators[0].PrivValidator
+	return p.nextHeight(t, signer, p.s.height2ProposalDeliverTime, p.s.height2ProposedBlockTime, p.s.height3ProposedBlockTime)
+}
+
+func (p *pbtsTestHarness) height3(t *testing.T) heightResult {
+	signer := p.otherValidators[1].PrivValidator
+	return p.nextHeight(t, signer, p.s.height3ProposalDeliverTime, p.s.height3ProposedBlockTime, time.Now())
+}
+
+// TODO: Read from the vote chan to determine vote timings.
+func (p *pbtsTestHarness) nextHeight(t *testing.T, proposer types.PrivValidator, dt time.Time, proposedTime, nextProposedTime time.Time) heightResult {
+	ensureNewRound(t, p.roundCh, p.currentHeight, p.currentRound)
+
+	b, _ := p.observedState.createProposalBlock()
+	b.Height = p.currentHeight
+	b.Header.Height = p.currentHeight
+	b.Header.Time = proposedTime
+
+	k, err := proposer.GetPubKey(context.Background())
+	assert.Nil(t, err)
+	b.Header.ProposerAddress = k.Address()
+	ps := b.MakePartSet(types.BlockPartSizeBytes)
+	bid := types.BlockID{Hash: b.Hash(), PartSetHeader: ps.Header()}
+	prop := types.NewProposal(p.currentHeight, 0, -1, bid)
+	tp := prop.ToProto()
+
+	if err := proposer.SignProposal(context.Background(), p.observedState.state.ChainID, tp); err != nil {
 		t.Fatalf("error signing proposal: %s", err)
 	}
-	if err := cs1.SetProposalAndBlock(proposal, b, partSet, "peerID"); err != nil {
+	time.Sleep(time.Until(dt))
+	prop.Signature = tp.Signature
+	if err := p.observedState.SetProposalAndBlock(prop, b, ps, "peerID"); err != nil {
 		t.Fatal(err)
 	}
+	ensureProposal(t, p.proposalCh, p.currentHeight, 0, bid)
 
-	fmt.Println("adding votes")
-	//	ensureProposal(t, proposalCh, height, round, blockID)
-	signAddVotes(cfg, cs1, tmproto.PrecommitType, blockID.Hash, blockID.PartSetHeader, vss[:4]...)
-	// wait to finish commit, propose in next height
-	ensureNewBlock(t, newBlockCh, 0)
-	assert.Equal(t, bt, cs1.state.LastBlockTime)
-	// create the height for h-1 with timestamp t1, where t1 is in the future
-	// set this block as the block from h-1 of a validator
-	// do not deliver a proposal
-	// ensure that the validator waits until after t1
-	// create a proposal with timestamp t2
-	// ensure that the validator
-	// create he
-	// what do I do here
+	signAddVotes(p.observedState, tmproto.PrevoteType, p.chainID, nextProposedTime, bid, p.observedValidator)
+	signAddVotes(p.observedState, tmproto.PrevoteType, p.chainID, nextProposedTime, bid, p.otherValidators...)
 
-	// create a state at height h
-	// want to hand the suite:
-	// Time of h-1
-	// Time that the proposer will set into the block
-	// Time that the validator will receive the block
-	//
-	// Want to record
-	// What time the validator ended the propose step
-	// How the validator voted
-	//
-	//
+	signAddVotes(p.observedState, tmproto.PrecommitType, p.chainID, nextProposedTime, bid, p.observedValidator)
+	signAddVotes(p.observedState, tmproto.PrecommitType, p.chainID, nextProposedTime, bid, p.otherValidators...)
+	ensureNewBlock(t, p.blockCh, p.currentHeight)
+	p.currentHeight++
+	incrementHeight(p.otherValidators...)
+	return heightResult{}
+}
 
+func (p *pbtsTestHarness) run(t *testing.T) resultSet {
+	p.genesisHeight(t)
+	r2 := p.height2(t)
+	r3 := p.height3(t)
+	return resultSet{
+		height2: r2,
+		height3: r3,
+	}
+}
+
+type resultSet struct {
+	height2 heightResult
+	height3 heightResult
+}
+type heightResult struct {
+	prevote           *types.Vote
+	prevoteIssuedAt   time.Time
+	precommit         *types.Vote
+	precommitIssuedAt time.Time
+}
+
+func TestValidatorWaitsForPreviousBlockTime(t *testing.T) {
+	h := newPBTSTestHarness(t, pbtsTestConfiguration{
+		genesisTime:                time.Now(),
+		timeoutPropose:             time.Second * 3,
+		height2ProposalDeliverTime: time.Now().Add(time.Second * 1),
+		height2ProposedBlockTime:   time.Now().Add(time.Second * 1),
+		height3ProposalDeliverTime: time.Now().Add(time.Second * 3),
+		height3ProposedBlockTime:   time.Now().Add(time.Second * 3),
+	})
+	results := h.run(t)
+	fmt.Println(results)
+	/*
+		assert.NotNil(t, h.r.height2Prevote.BlockID.Hash)
+		assert.NotNil(t, h.r.height2Precommit.BlockID.Hash)
+	*/
 }
 
 func TestProposerWaitTime(t *testing.T) {
@@ -182,33 +254,3 @@ func TestProposalTimeout(t *testing.T) {
 		})
 	}
 }
-
-/*
-func makeCommit(blockID BlockID, height int64, round int32,
-	voteSet *VoteSet, validators []PrivValidator, now time.Time) (*Commit, error) {
-
-	// all sign
-	for i := 0; i < len(validators); i++ {
-		pubKey, err := validators[i].GetPubKey(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("can't get pubkey: %w", err)
-		}
-		vote := &Vote{
-			ValidatorAddress: pubKey.Address(),
-			ValidatorIndex:   int32(i),
-			Height:           height,
-			Round:            round,
-			Type:             tmproto.PrecommitType,
-			BlockID:          blockID,
-			Timestamp:        now,
-		}
-
-		_, err = signAddVote(validators[i], vote, voteSet)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return voteSet.MakeCommit(), nil
-}
-*/

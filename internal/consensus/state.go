@@ -545,6 +545,7 @@ func (cs *State) SetProposalAndBlock(
 	peerID types.NodeID,
 ) error {
 
+	fmt.Println(proposal.BlockID.Hash)
 	if err := cs.SetProposal(proposal, peerID); err != nil {
 		return err
 	}
@@ -1116,7 +1117,10 @@ func (cs *State) enterPropose(height int64, round int32) {
 	}()
 
 	// If we don't get the proposal and all block parts quick enough, enterPrevote
-	cs.scheduleTimeout(cs.config.Propose(round), height, round, cstypes.RoundStepPropose)
+	waitingTime := proposalStepWaitingTime(tmtime.DefaultSource{}, cs.state.LastBlockTime, cs.state.ConsensusParams.Timestamp)
+	proposalTimeout := maxDuration(cs.config.Propose(round), waitingTime)
+	fmt.Println("waiting time ", waitingTime)
+	cs.scheduleTimeout(proposalTimeout, height, round, cstypes.RoundStepPropose)
 
 	// Nothing more to do if we're not a validator
 	if cs.privValidator == nil {
@@ -1188,9 +1192,7 @@ func (cs *State) defaultDecideProposal(height int64, round int32) {
 	p := proposal.ToProto()
 
 	// wait the max amount we would wait for a proposal
-	waitingTime := proposalStepWaitingTime(tmtime.DefaultSource{}, cs.state.LastBlockTime, cs.state.ConsensusParams.Timestamp)
-	proposalTimeout := maxDuration(cs.config.TimeoutPropose, waitingTime)
-	ctx, cancel := context.WithTimeout(context.TODO(), proposalTimeout)
+	ctx, cancel := context.WithTimeout(context.TODO(), cs.config.TimeoutPropose)
 	defer cancel()
 	if err := cs.privValidator.SignProposal(ctx, cs.state.ChainID, p); err == nil {
 		proposal.Signature = p.Signature
@@ -1871,6 +1873,7 @@ func (cs *State) defaultSetProposal(proposal *types.Proposal) error {
 	}
 
 	p := proposal.ToProto()
+	fmt.Println(proposal.Signature)
 	// Verify signature
 	if !cs.Validators.GetProposer().PubKey.VerifySignature(
 		types.ProposalSignBytes(cs.state.ChainID, p), proposal.Signature,

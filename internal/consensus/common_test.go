@@ -30,7 +30,6 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	tmpubsub "github.com/tendermint/tendermint/libs/pubsub"
-	tmtime "github.com/tendermint/tendermint/libs/time"
 	"github.com/tendermint/tendermint/privval"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	sm "github.com/tendermint/tendermint/state"
@@ -42,7 +41,7 @@ const (
 	testSubscriber = "test-client"
 
 	// genesis, chain_id, priv_val
-	ensureTimeout = time.Millisecond * 200
+	ensureTimeout = time.Millisecond * 400
 )
 
 // A cleanupFunc cleans up any config / test files created for a particular
@@ -103,10 +102,10 @@ func newValidatorStub(privValidator types.PrivValidator, valIndex int32) *valida
 }
 
 func (vs *validatorStub) signVote(
-	config *cfg.Config,
 	voteType tmproto.SignedMsgType,
-	hash []byte,
-	header types.PartSetHeader) (*types.Vote, error) {
+	chainID string,
+	time time.Time,
+	blockID types.BlockID) (*types.Vote, error) {
 
 	pubKey, err := vs.PrivValidator.GetPubKey(context.Background())
 	if err != nil {
@@ -118,12 +117,12 @@ func (vs *validatorStub) signVote(
 		ValidatorAddress: pubKey.Address(),
 		Height:           vs.Height,
 		Round:            vs.Round,
-		Timestamp:        tmtime.Now(),
+		Timestamp:        time,
 		Type:             voteType,
-		BlockID:          types.BlockID{Hash: hash, PartSetHeader: header},
+		BlockID:          blockID,
 	}
 	v := vote.ToProto()
-	if err := vs.PrivValidator.SignVote(context.Background(), config.ChainID(), v); err != nil {
+	if err := vs.PrivValidator.SignVote(context.Background(), chainID, v); err != nil {
 		return nil, fmt.Errorf("sign vote failed: %w", err)
 	}
 
@@ -142,12 +141,12 @@ func (vs *validatorStub) signVote(
 // Sign vote for type/hash/header
 func signVote(
 	vs *validatorStub,
-	config *cfg.Config,
 	voteType tmproto.SignedMsgType,
-	hash []byte,
-	header types.PartSetHeader) *types.Vote {
+	chainID string,
+	time time.Time,
+	blockID types.BlockID) *types.Vote {
 
-	v, err := vs.signVote(config, voteType, hash, header)
+	v, err := vs.signVote(voteType, chainID, time, blockID)
 	if err != nil {
 		panic(fmt.Errorf("failed to sign vote: %v", err))
 	}
@@ -158,14 +157,14 @@ func signVote(
 }
 
 func signVotes(
-	config *cfg.Config,
 	voteType tmproto.SignedMsgType,
-	hash []byte,
-	header types.PartSetHeader,
+	chainID string,
+	time time.Time,
+	blockID types.BlockID,
 	vss ...*validatorStub) []*types.Vote {
 	votes := make([]*types.Vote, len(vss))
 	for i, vs := range vss {
-		votes[i] = signVote(vs, config, voteType, hash, header)
+		votes[i] = signVote(vs, voteType, chainID, time, blockID)
 	}
 	return votes
 }
@@ -253,20 +252,19 @@ func decideProposal(
 
 func addVotes(to *State, votes ...*types.Vote) {
 	for _, vote := range votes {
-		fmt.Println("adding vote")
 		to.peerMsgQueue <- msgInfo{Msg: &VoteMessage{vote}}
 	}
 }
 
 func signAddVotes(
-	config *cfg.Config,
 	to *State,
 	voteType tmproto.SignedMsgType,
-	hash []byte,
-	header types.PartSetHeader,
+	chainID string,
+	time time.Time,
+	blockID types.BlockID,
 	vss ...*validatorStub,
 ) {
-	votes := signVotes(config, voteType, hash, header, vss...)
+	votes := signVotes(voteType, chainID, time, blockID, vss...)
 	addVotes(to, votes...)
 }
 
