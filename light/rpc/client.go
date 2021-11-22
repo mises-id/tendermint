@@ -133,7 +133,7 @@ func (c *Client) ABCIQueryWithOptions(ctx context.Context, path string, data tmb
 	opts rpcclient.ABCIQueryOptions) (*ctypes.ResultABCIQuery, error) {
 
 	// always request the proof
-	opts.Prove = true
+	needProve := opts.Prove
 
 	res, err := c.next.ABCIQueryWithOptions(ctx, path, data, opts)
 	if err != nil {
@@ -141,18 +141,18 @@ func (c *Client) ABCIQueryWithOptions(ctx context.Context, path string, data tmb
 	}
 	resp := res.Response
 
+	fmt.Println("abci resp", resp.String())
 	// Validate the response.
 	if resp.IsErr() {
 		return nil, fmt.Errorf("err response code: %v", resp.Code)
 	}
-	if len(resp.Key) == 0 {
-		return nil, errors.New("empty key")
-	}
-	if resp.ProofOps == nil || len(resp.ProofOps.Ops) == 0 {
-		return nil, errors.New("no proof ops")
-	}
+
 	if resp.Height <= 0 {
 		return nil, errNegOrZeroHeight
+	}
+
+	if !needProve {
+		return &ctypes.ResultABCIQuery{Response: resp}, nil
 	}
 
 	// Update the light client if we're behind.
@@ -161,6 +161,14 @@ func (c *Client) ABCIQueryWithOptions(ctx context.Context, path string, data tmb
 	l, err := c.updateLightClientIfNeededTo(ctx, &nextHeight)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(resp.Key) == 0 {
+		fmt.Println("abci resp empty key")
+		return nil, errors.New("empty key")
+	}
+	if resp.ProofOps == nil || len(resp.ProofOps.Ops) == 0 {
+		return nil, errors.New("no proof ops")
 	}
 
 	// Validate the value proof against the trusted header.
