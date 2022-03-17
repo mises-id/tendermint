@@ -123,6 +123,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("can't create a db: %w", err)
 	}
+	defer db.Close()
 
 	if primaryAddr == "" { // check to see if we can start from an existing state
 		var err error
