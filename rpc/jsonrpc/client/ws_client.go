@@ -77,6 +77,8 @@ type WSClient struct { // nolint: maligned
 	// Time between sending a ping and receiving a pong. See
 	// https://godoc.org/github.com/rcrowley/go-metrics#Timer.
 	PingPongLatencyTimer metrics.Timer
+
+	dialed bool
 }
 
 // NewWS returns a new client. See the commentary on the func(*WSClient)
@@ -170,8 +172,12 @@ func (c *WSClient) String() string {
 // OnStart implements service.Service by dialing a server and creating read and
 // write routines.
 func (c *WSClient) OnStart() error {
+	c.wg.Add(1) //dialing
+	defer c.wg.Done()
+
 	err := c.dial()
 	if err != nil {
+		c.Logger.Error("fail to start:", err)
 		return err
 	}
 
@@ -188,6 +194,7 @@ func (c *WSClient) OnStart() error {
 	c.startReadWriteRoutines()
 	go c.reconnectRoutine()
 
+	c.dialed = true
 	return nil
 }
 
@@ -199,8 +206,15 @@ func (c *WSClient) Stop() error {
 	}
 	// only close user-facing channels when we can't write to them
 	c.wg.Wait()
-	close(c.ResponsesCh)
+	if c.dialed {
+		close(c.ResponsesCh)
+	}
+	c.dialed = false
 
+	return nil
+}
+
+func (c *WSClient) OnReset() error {
 	return nil
 }
 
@@ -354,7 +368,6 @@ func (c *WSClient) reconnectRoutine() {
 				if err = c.Stop(); err != nil {
 					c.Logger.Error("failed to stop conn", "error", err)
 				}
-
 				return
 			}
 			// drain reconnectAfter
@@ -375,6 +388,7 @@ func (c *WSClient) reconnectRoutine() {
 			return
 		}
 	}
+
 }
 
 // The client ensures that there is at most one writer to a connection by

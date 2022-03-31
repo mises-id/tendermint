@@ -49,7 +49,14 @@ type Client struct {
 	// proof runtime used to verify values returned by ABCIQuery
 	prt       *merkle.ProofRuntime
 	keyPathFn KeyPathFunc
+
+	resetTimer         *time.Timer
+	resetTimerDisabled bool
 }
+
+const (
+	DefaultResetTimeout = 60 * time.Second
+)
 
 var _ rpcclient.Client = (*Client)(nil)
 
@@ -94,6 +101,24 @@ func NewClient(next rpcclient.Client, lc LightClient, opts ...Option) *Client {
 		prt:  merkle.DefaultProofRuntime(),
 	}
 	c.BaseService = *service.NewBaseService(nil, "Client", c)
+	c.resetTimer = time.NewTimer(DefaultResetTimeout)
+	go func() {
+		for {
+			select {
+			case <-c.resetTimer.C:
+				c.Logger.Info("client idle, reseting")
+				if c.IsRunning() {
+					if err := c.Stop(); err != nil {
+						c.Logger.Error("can't stop client: %w", err)
+					}
+					//simplly reset now and we will start on need
+					if err := c.Reset(); err != nil {
+						c.Logger.Error("can't reset client: %w", err)
+					}
+				}
+			}
+		}
+	}()
 	for _, o := range opts {
 		o(c)
 	}
@@ -113,6 +138,25 @@ func (c *Client) OnStop() {
 			c.Logger.Error("Error stopping on next", "err", err)
 		}
 	}
+}
+func (c *Client) OnReset() error {
+	if err := c.next.Reset(); err != nil {
+		c.Logger.Error("Error reseting on next", "err", err)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DisableAutoReset() {
+	c.resetTimer.Stop()
+	c.resetTimerDisabled = true
+}
+
+func (c *Client) Activate() {
+	if c.resetTimerDisabled {
+		return
+	}
+	c.resetTimer.Reset(DefaultResetTimeout)
 }
 
 func (c *Client) Status(ctx context.Context) (*ctypes.ResultStatus, error) {

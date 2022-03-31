@@ -620,6 +620,15 @@ func (w *WSEvents) OnStop() {
 	}
 }
 
+// OnReset implements service.Service by reseting WSClient.
+func (w *WSEvents) OnReset() error {
+	if err := w.ws.Reset(); err != nil {
+		w.Logger.Error("Can't reset ws client", "err", err)
+		return err
+	}
+	return nil
+}
+
 // Subscribe implements EventsClient by using WSClient to subscribe given
 // subscriber to query. By default, returns a channel with cap=1. Error is
 // returned if it fails to subscribe.
