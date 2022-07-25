@@ -52,6 +52,7 @@ type Client struct {
 
 	resetTimer         *time.Timer
 	resetTimerDisabled bool
+	hasSubscription    bool
 }
 
 const (
@@ -585,7 +586,11 @@ func (c *Client) BroadcastEvidence(ctx context.Context, ev types.Evidence) (*cty
 
 func (c *Client) Subscribe(ctx context.Context, subscriber, query string,
 	outCapacity ...int) (out <-chan ctypes.ResultEvent, err error) {
-	return c.next.Subscribe(ctx, subscriber, query, outCapacity...)
+	out, err = c.next.Subscribe(ctx, subscriber, query, outCapacity...)
+	if err != nil {
+		c.hasSubscription = true
+	}
+	return
 }
 
 func (c *Client) Unsubscribe(ctx context.Context, subscriber, query string) error {
@@ -593,6 +598,9 @@ func (c *Client) Unsubscribe(ctx context.Context, subscriber, query string) erro
 }
 
 func (c *Client) UnsubscribeAll(ctx context.Context, subscriber string) error {
+	if !c.hasSubscription {
+		return nil
+	}
 	return c.next.UnsubscribeAll(ctx, subscriber)
 }
 
@@ -624,6 +632,7 @@ func (c *Client) SubscribeWS(ctx *rpctypes.Context, query string) (*ctypes.Resul
 	if err != nil {
 		return nil, err
 	}
+	c.hasSubscription = true
 
 	go func() {
 		for {
@@ -658,6 +667,9 @@ func (c *Client) UnsubscribeWS(ctx *rpctypes.Context, query string) (*ctypes.Res
 // UnsubscribeAllWS calls original client's UnsubscribeAll using remote address
 // as a subscriber.
 func (c *Client) UnsubscribeAllWS(ctx *rpctypes.Context) (*ctypes.ResultUnsubscribe, error) {
+	if !c.hasSubscription {
+		return &ctypes.ResultUnsubscribe{}, nil
+	}
 	err := c.next.UnsubscribeAll(context.Background(), ctx.RemoteAddr())
 	if err != nil {
 		return nil, err

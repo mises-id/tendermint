@@ -276,10 +276,22 @@ func (c *WSClient) nextRequestID() types.JSONRPCIntID {
 }
 
 func (c *WSClient) dial() error {
-	dialer := &websocket.Dialer{
-		NetDial: c.Dialer,
-		Proxy:   http.ProxyFromEnvironment,
+	var dialer *websocket.Dialer
+	if config := types.GlobalClientTlsConfig(); config != nil {
+		fmt.Println("WSClient created with custom CA")
+		dialer = &websocket.Dialer{
+			NetDial:         c.Dialer,
+			Proxy:           http.ProxyFromEnvironment,
+			TLSClientConfig: config,
+		}
+	} else {
+		fmt.Println("WSClient created")
+		dialer = &websocket.Dialer{
+			NetDial: c.Dialer,
+			Proxy:   http.ProxyFromEnvironment,
+		}
 	}
+
 	rHeader := http.Header{}
 	conn, _, err := dialer.Dial(c.protocol+"://"+c.Address+c.Endpoint, rHeader) // nolint:bodyclose
 	if err != nil {

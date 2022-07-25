@@ -394,12 +394,28 @@ func DefaultHTTPClient(remoteAddr string) (*http.Client, error) {
 		return nil, err
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
+	var tr *http.Transport
+	if config := types.GlobalClientTlsConfig(); config != nil {
+		fmt.Println("DefaultHTTPClient created with custom CA")
+		// Get the SystemCertPool, continue with an empty pool on error
+
+		tr = &http.Transport{
 			// Set to true to prevent GZIP-bomb DoS attacks
 			DisableCompression: true,
 			Dial:               dialFn,
-		},
+			TLSClientConfig:    config,
+		}
+	} else {
+		fmt.Println("DefaultHTTPClient created")
+		tr = &http.Transport{
+			// Set to true to prevent GZIP-bomb DoS attacks
+			DisableCompression: true,
+			Dial:               dialFn,
+		}
+	}
+
+	client := &http.Client{
+		Transport: tr,
 	}
 
 	return client, nil
