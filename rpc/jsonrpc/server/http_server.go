@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	golog "log"
 	"net"
 	"net/http"
 	"os"
@@ -45,6 +46,26 @@ func DefaultConfig() *Config {
 	}
 }
 
+type serverErrorLogWriter struct {
+	logger log.Logger
+}
+
+func (s *serverErrorLogWriter) Write(p []byte) (int, error) {
+	m := string(p)
+	if strings.HasPrefix(m, "http: TLS handshake error") && strings.HasSuffix(m, ": EOF\n") {
+		// handle EOF error
+		s.logger.Error(m)
+	} else {
+		// handle other errors
+		s.logger.Info(m)
+	}
+	return len(p), nil
+}
+
+func newServerErrorLog(logger log.Logger) *golog.Logger {
+	return golog.New(&serverErrorLogWriter{logger}, "HttpServer", 0)
+}
+
 // Serve creates a http.Server and calls Serve with the given listener. It
 // wraps handler with RecoverAndLogHandler and a handler, which limits the max
 // body size to config.MaxBodyBytes.
@@ -57,6 +78,7 @@ func Serve(listener net.Listener, handler http.Handler, logger log.Logger, confi
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
+		ErrorLog:       newServerErrorLog(logger),
 	}
 	err := s.Serve(listener)
 	logger.Info("RPC HTTP server stopped", "err", err)
@@ -139,6 +161,7 @@ func WriteRPCResponseHTTP(w http.ResponseWriter, res ...types.RPCResponse) error
 // HTTP 500 error response.
 func RecoverAndLogHandler(handler http.Handler, logger log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.Info("Incomming Request")
 		// Wrap the ResponseWriter to remember the status
 		rww := &responseWriterWrapper{-1, w}
 		begin := time.Now()

@@ -211,6 +211,8 @@ func (c *WSClient) Stop() error {
 	}
 	c.dialed = false
 
+	fmt.Println(c.String() + " stopped")
+
 	return nil
 }
 
@@ -278,14 +280,14 @@ func (c *WSClient) nextRequestID() types.JSONRPCIntID {
 func (c *WSClient) dial() error {
 	var dialer *websocket.Dialer
 	if config := types.GlobalClientTlsConfig(); config != nil {
-		fmt.Println("WSClient created with custom CA")
+		fmt.Println(c.String() + " created with custom CA")
 		dialer = &websocket.Dialer{
 			NetDial:         c.Dialer,
 			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: config,
 		}
 	} else {
-		fmt.Println("WSClient created")
+		fmt.Println(c.String() + " created")
 		dialer = &websocket.Dialer{
 			NetDial: c.Dialer,
 			Proxy:   http.ProxyFromEnvironment,

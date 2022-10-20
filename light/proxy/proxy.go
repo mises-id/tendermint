@@ -105,12 +105,12 @@ func (p *Proxy) listen() (net.Listener, *http.ServeMux, error) {
 	wm.SetLogger(wmLogger)
 	mux.HandleFunc("/websocket", wm.WebsocketHandler)
 
-	// 3) Start a client.
-	if !p.Client.IsRunning() {
-		if err := p.Client.Start(); err != nil {
-			return nil, mux, fmt.Errorf("can't start client: %w", err)
-		}
-	}
+	// // 3) Start a client.
+	// if !p.Client.IsRunning() {
+	// 	if err := p.Client.Start(); err != nil {
+	// 		return nil, mux, fmt.Errorf("can't start client: %w", err)
+	// 	}
+	// }
 
 	// 4) Start listening for new connections.
 	listener, err := rpcserver.Listen(p.Addr, p.Config)
